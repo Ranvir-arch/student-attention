@@ -1,5 +1,5 @@
 let captureInterval = null;
-const BACKEND_URL = 'http://localhost:3000/api/images';
+const BACKEND_URL = 'https://student-attention.onrender.com/api/images';
 
 // Listen for tab updates
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
