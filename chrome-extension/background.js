@@ -261,7 +261,12 @@ async function sendImageToBackend(imageData, meetingId, userId, participantId, u
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Origin': chrome.runtime.getURL(''),
+        'Access-Control-Allow-Origin': '*'
       },
+      mode: 'cors',
+      credentials: 'omit',
       body: JSON.stringify({
         imageData,
         meetingId,
