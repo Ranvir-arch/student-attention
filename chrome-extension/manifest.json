@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Google Meet Status Indicator",
+  "version": "1.0",
+  "description": "Captures and sends meeting images to backend",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "scripting",
+    "storage",
+    "desktopCapture"
+  ],
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "http://localhost:3000/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icons/icon.svg"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "128": "icons/icon.svg"
+  }
+} 

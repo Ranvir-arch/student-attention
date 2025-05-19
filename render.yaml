@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: attention-tracker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: PORT
+        value: 10000
+      - key: DB_PATH
+        value: attention_scores.db
+      - key: IMAGES_DIR
+        value: images
+      - key: MEETING_DATA_DIR
+        value: meeting_data
+      - key: HOST
+        value: 0.0.0.0
+      - key: ALLOWED_ORIGINS
+        value: chrome-extension://* 
