@@ -182,72 +182,98 @@ function getDeviceId(callback) {
 // Function to capture image from camera (runs in content script context)
 function captureCameraImage(retryCount = 0) {
   console.log('Starting image capture process');
+  
+  // Find the user's own video element
+  // In Google Meet, the user's own video usually has specific classes or attributes
   const videoElements = Array.from(document.querySelectorAll('video'));
   console.log('Found video elements:', videoElements.length);
 
-  let mainVideo = videoElements.find(video =>
-    video.offsetWidth > 100 &&
-    video.offsetHeight > 100 &&
-    video.srcObject &&
-    video.readyState === 4
-  );
+  // Find the user's own video element
+  let userVideo = videoElements.find(video => {
+    // Check if this is the user's own video
+    const isUserVideo = 
+      // Usually the user's video is in a specific container
+      video.closest('[data-self-view]') !== null ||
+      // Or has specific classes
+      video.closest('.self-view') !== null ||
+      // Or is in the main video area
+      (video.offsetWidth > 100 && 
+       video.offsetHeight > 100 && 
+       video.srcObject && 
+       video.readyState === 4 &&
+       // Additional check to ensure it's the user's video
+       video.closest('[data-allocation-index="0"]') !== null);
+    
+    return isUserVideo;
+  });
 
-  if (!mainVideo) {
+  if (!userVideo) {
     if (retryCount < 10) {
-      console.log('No suitable video element found, retrying...');
+      console.log('No user video element found, retrying...');
       setTimeout(() => captureCameraImage(retryCount + 1), 1000);
     } else {
-      console.log('No suitable video element found after retries.');
+      console.log('No user video element found after retries.');
     }
     return;
   }
 
-  console.log('Found video element:', {
-    width: mainVideo.videoWidth,
-    height: mainVideo.videoHeight,
-    readyState: mainVideo.readyState,
-    hasStream: !!mainVideo.srcObject,
-    classes: mainVideo.className,
-    parentClasses: mainVideo.parentElement?.className,
-    isPlaying: !mainVideo.paused,
-    currentTime: mainVideo.currentTime
+  console.log('Found user video element:', {
+    width: userVideo.videoWidth,
+    height: userVideo.videoHeight,
+    readyState: userVideo.readyState,
+    hasStream: !!userVideo.srcObject,
+    classes: userVideo.className,
+    parentClasses: userVideo.parentElement?.className,
+    isPlaying: !userVideo.paused,
+    currentTime: userVideo.currentTime
   });
 
   try {
     const canvas = document.createElement('canvas');
-    canvas.width = mainVideo.videoWidth || 640;
-    canvas.height = mainVideo.videoHeight || 480;
+    canvas.width = userVideo.videoWidth || 640;
+    canvas.height = userVideo.videoHeight || 480;
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(mainVideo, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(userVideo, 0, 0, canvas.width, canvas.height);
 
     const imageData = canvas.toDataURL('image/jpeg', 0.8);
     const meetingId = window.location.pathname.split('/').pop();
-    // Try to extract userId, participantId, and userName from the page
+    
+    // Get user information
+    let userName = null;
     let userId = null;
     let participantId = null;
-    let userName = null;
-    // Extract userName from <span class="notranslate">
+
+    // Try to get user name from the page
     const nameElem = document.querySelector('span.notranslate');
     if (nameElem) {
       userName = nameElem.textContent.trim();
     }
+
+    // Get user ID from the page
     const userElem = document.querySelector('[data-self-name]');
     if (userElem) {
       userId = userElem.getAttribute('data-self-name');
     }
+
+    // Get participant ID
     const participantElem = document.querySelector('[data-participant-id]');
     if (participantElem) {
       participantId = participantElem.getAttribute('data-participant-id');
     }
-    // Send image data to background script (no deviceId here)
-    chrome.runtime.sendMessage({
-      type: 'IMAGE_CAPTURED',
-      imageData,
-      meetingId,
-      userId,
-      userName,
-      participantId
-    });
+
+    // Only send if we have a valid user name
+    if (userName) {
+      chrome.runtime.sendMessage({
+        type: 'IMAGE_CAPTURED',
+        imageData,
+        meetingId,
+        userId,
+        userName,
+        participantId
+      });
+    } else {
+      console.log('No user name found, skipping capture');
+    }
   } catch (error) {
     console.error('Error capturing image:', error);
   }
