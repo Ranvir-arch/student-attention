@@ -39,7 +39,6 @@ env/
 *.log
 
 # Local data
-images/
 meeting_data/
 attention_scores.db
 
