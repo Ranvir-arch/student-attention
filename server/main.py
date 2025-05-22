@@ -33,7 +33,7 @@ app = FastAPI()
 # Mount the images directory to serve static files
 # The path here should match where the images are located relative to the server script
 # Assuming the images directory is *inside* the server directory for Render deployment
-app.mount("/images", StaticFiles(directory="server/images"), name="images")
+app.mount("/images", StaticFiles(directory="images"), name="images")
 
 # Enable CORS for the Chrome extension
 app.add_middleware(
