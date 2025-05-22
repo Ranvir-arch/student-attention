@@ -233,38 +233,129 @@ async def db_attention_page():
     <head>
         <title>Attention Scores Lookup</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 2em; }
-            table { border-collapse: collapse; width: 100%; margin-top: 1em; }
-            th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
-            th { background: #f0f0f0; }
+            body {
+                font-family: Arial, sans-serif;
+                margin: 2em;
+                background-color: #f4f4f4;
+                color: #333;
+            }
+            .container {
+                max-width: 800px;
+                margin: 0 auto;
+                background-color: #fff;
+                padding: 2em;
+                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+                border-radius: 8px;
+            }
+            h2 {
+                text-align: center;
+                color: #0056b3;
+            }
+            .logo-container {
+                text-align: center;
+                margin-bottom: 2em;
+            }
+            .logo-container img {
+                max-width: 150px;
+                height: auto;
+            }
+            form {
+                margin-bottom: 2em;
+                text-align: center;
+            }
+            form label {
+                margin-right: 1em;
+                font-weight: bold;
+            }
+            form input[type='text'] {
+                padding: 0.5em;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                margin-right: 1em;
+            }
+            form button {
+                padding: 0.5em 1.5em;
+                background-color: #007bff;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                transition: background-color 0.3s ease;
+            }
+            form button:hover {
+                background-color: #0056b3;
+            }
+            table {
+                border-collapse: collapse;
+                width: 100%;
+                margin-top: 1em;
+                border: 1px solid #ddd;
+            }
+            th, td {
+                border: 1px solid #ddd;
+                padding: 10px;
+                text-align: left;
+            }
+            th {
+                background-color: #007bff;
+                color: white;
+            }
+            tr:nth-child(even) {
+                background-color: #f2f2f2;
+            }
+            tr:hover {
+                background-color: #ddd;
+            }
+            #results {
+                margin-top: 1.5em;
+            }
+            #results p {
+                text-align: center;
+                font-style: italic;
+            }
         </style>
     </head>
     <body>
-        <h2>Attention Scores Lookup</h2>
-        <form id='meet-form'>
-            <label for='meeting-id'>Meeting ID:</label>
-            <input type='text' id='meeting-id' name='meeting-id' required>
-            <button type='submit'>Search</button>
-        </form>
-        <div id='results'></div>
+        <div class='container'>
+            <div class='logo-container'>
+                <img src='/images/logo_p.jpg' alt='Logo'>
+            </div>
+            <h2>Attention Scores Lookup</h2>
+            <form id='meet-form'>
+                <label for='meeting-id'>Meeting ID:</label>
+                <input type='text' id='meeting-id' name='meeting-id' required>
+                <button type='submit'>Search</button>
+            </form>
+            <div id='results'></div>
+        </div>
         <script>
         document.getElementById('meet-form').onsubmit = async function(e) {
             e.preventDefault();
             const meetId = document.getElementById('meeting-id').value.trim();
             if (!meetId) return;
             document.getElementById('results').innerHTML = 'Loading...';
-            const resp = await fetch(`/api/db-attention-data?meeting_id=${encodeURIComponent(meetId)}`);
-            const data = await resp.json();
-            if (!data.length) {
-                document.getElementById('results').innerHTML = '<p>No data found for this meeting ID.</p>';
-                return;
+            // Construct the URL based on the current host
+            const dataUrl = `${window.location.origin}/api/db-attention-data?meeting_id=${encodeURIComponent(meetId)}`;
+            try {
+                const resp = await fetch(dataUrl);
+                if (!resp.ok) {
+                    throw new Error(`HTTP error! status: ${resp.status}`);
+                }
+                const data = await resp.json();
+                if (!data.length) {
+                    document.getElementById('results').innerHTML = '<p>No data found for this meeting ID.</p>';
+                    return;
+                }
+                let html = `<table><tr><th>User Name</th><th>Device ID</th><th>Attention (%)</th></tr>`;
+                for (const row of data) {
+                    html += `<tr><td>${row.user_name || ''}</td><td>${row.device_id}</td><td>${(row.attention_percent).toFixed(2)}</td></tr>`;
+                }
+                html += '</table>';
+                document.getElementById('results').innerHTML = html;
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                document.getElementById('results').innerHTML = '<p>Error loading data. Please try again.</p>';
             }
-            let html = `<table><tr><th>User Name</th><th>Device ID</th><th>Attention (%)</th></tr>`;
-            for (const row of data) {
-                html += `<tr><td>${row.user_name || ''}</td><td>${row.device_id}</td><td>${(row.attention_percent).toFixed(2)}</td></tr>`;
-            }
-            html += '</table>';
-            document.getElementById('results').innerHTML = html;
         };
         </script>
     </body>
