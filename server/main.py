@@ -30,10 +30,14 @@ ALLOWED_ORIGINS = os.getenv('ALLOWED_ORIGINS', 'chrome-extension://*').split(','
 
 app = FastAPI()
 
-# Mount the images directory to serve static files
-# The path here should match where the images are located relative to the server script
-# Assuming the images directory is *inside* the server directory for Render deployment
-app.mount("/images", StaticFiles(directory="server/images"), name="images")
+# Mount the actual images directory to serve static files
+# Use os.path.join with the current file's directory for a more reliable path
+STATIC_IMAGES_DIR = os.path.join(os.path.dirname(__file__), "images")
+
+# Ensure the static directory exists (useful for local testing, might not be needed on Render build)
+# os.makedirs(STATIC_IMAGES_DIR, exist_ok=True)
+
+app.mount("/images", StaticFiles(directory=STATIC_IMAGES_DIR), name="images")
 
 # Enable CORS for the Chrome extension
 app.add_middleware(
