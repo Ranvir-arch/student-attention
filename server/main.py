@@ -15,6 +15,7 @@ from fastapi import Request, Query
 import csv
 from io import StringIO
 from dotenv import load_dotenv
+from fastapi.staticfiles import StaticFiles
 
 # Load environment variables
 load_dotenv()
@@ -29,6 +30,11 @@ ALLOWED_ORIGINS = os.getenv('ALLOWED_ORIGINS', 'chrome-extension://*').split(','
 
 app = FastAPI()
 
+# Mount the images directory to serve static files
+# The path here should match where the images are located relative to the server script
+# Assuming the images directory is *inside* the server directory for Render deployment
+app.mount("/images", StaticFiles(directory="server/images"), name="images")
+
 # Enable CORS for the Chrome extension
 app.add_middleware(
     CORSMiddleware,
@@ -40,6 +46,7 @@ app.add_middleware(
 )
 
 # Create directories for storing images and meeting data
+# These are used by the application for data, not for serving static files
 os.makedirs(IMAGES_DIR, exist_ok=True)
 os.makedirs(MEETING_DATA_DIR, exist_ok=True)
 
