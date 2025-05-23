@@ -67,9 +67,8 @@ eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Create new table with updated schema
     c.execute('''
-        CREATE TABLE IF NOT EXISTS attention_scores_new (
+        CREATE TABLE IF NOT EXISTS attention_scores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             meeting_id TEXT NOT NULL,
             user_email TEXT NOT NULL,
@@ -81,26 +80,6 @@ def init_db():
             UNIQUE(meeting_id, user_email, date)
         )
     ''')
-    
-    # Check if old table exists
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='attention_scores'")
-    if c.fetchone():
-        # Migrate data from old table to new table
-        try:
-            c.execute('''
-                INSERT OR IGNORE INTO attention_scores_new (
-                    meeting_id, user_email, date, attention, updated_at, attention_sum, attention_count
-                )
-                SELECT 
-                    meeting_id, user_name, date, attention, updated_at, attention_sum, attention_count
-                FROM attention_scores
-            ''')
-            # Rename tables
-            c.execute("ALTER TABLE attention_scores RENAME TO attention_scores_old")
-            c.execute("ALTER TABLE attention_scores_new RENAME TO attention_scores")
-        except Exception as e:
-            print(f"Migration error: {e}")
-    
     conn.commit()
     conn.close()
 init_db()
