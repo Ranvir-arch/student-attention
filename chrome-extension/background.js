@@ -1,5 +1,6 @@
 let captureInterval = null;
 const BACKEND_URL = 'https://student-attention.onrender.com/api/images';
+let mediaStream = null;
 
 // Listen for tab updates
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -23,11 +24,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         console.log('User is in a meeting, starting capture');
         chrome.action.setBadgeText({ text: 'ON' });
         chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' });
-        startCameraCapture(tabId);
       } else {
         console.log('User is not in a meeting');
         chrome.action.setBadgeText({ text: '' });
-        stopCameraCapture();
       }
     });
   }
@@ -37,30 +36,42 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   console.log('Tab closed, stopping capture');
   chrome.action.setBadgeText({ text: '' });
-  stopCameraCapture();
 });
 
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'IMAGE_CAPTURED') {
     console.log('Received image from content script for meeting:', message.meetingId);
-    getDeviceId(function(deviceId) {
-      sendImageToBackend(
-        message.imageData,
-        message.meetingId,
-        message.userId,
-        message.participantId,
-        message.userName,
-        deviceId
-      )
-      .then(result => {
-        console.log('Image sent successfully from background:', result);
-        sendResponse({ success: true });
-      })
-      .catch(error => {
-        console.error('Failed to send image from background:', error);
-        sendResponse({ success: false, error: error.message });
-      });
+    sendImageToBackend(
+      message.imageData,
+      message.meetingId,
+      message.userId,
+      message.userName
+    )
+    .then(result => {
+      console.log('Image sent successfully from background:', result);
+      sendResponse({ success: true });
+    })
+    .catch(error => {
+      console.error('Failed to send image from background:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    // Return true to indicate async response
+    return true;
+  }
+  
+  // Handle email request from content script
+  if (message.action === "getEmail") {
+    console.log('Content script requested user email');
+    chrome.identity.getProfileUserInfo({ accountStatus: 'ANY' }, (userInfo) => {
+      console.log('Got user info from Chrome Identity API:', userInfo);
+      if (userInfo && userInfo.email) {
+        console.log('Sending email to content script:', userInfo.email);
+        sendResponse({ email: userInfo.email });
+      } else {
+        console.error('No email found in user profile');
+        sendResponse({ email: null, error: 'No email found' });
+      }
     });
     // Return true to indicate async response
     return true;
@@ -79,10 +90,8 @@ chrome.tabs.onActivated.addListener(activeInfo => {
         if (results && results[0] && results[0].result) {
           chrome.action.setBadgeText({ text: 'ON' });
           chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' });
-          startCameraCapture(tab.id);
         } else {
           chrome.action.setBadgeText({ text: '' });
-          stopCameraCapture();
         }
       });
     }
@@ -130,157 +139,8 @@ function checkMeetingStatus() {
   return isInMeeting;
 }
 
-// Function to start camera capture
-function startCameraCapture(tabId) {
-  console.log('Starting camera capture for tab:', tabId);
-  if (captureInterval) {
-    console.log('Clearing existing interval');
-    clearInterval(captureInterval);
-  }
-
-  // Add a 1-second delay before the first capture
-  setTimeout(() => {
-    captureInterval = setInterval(() => {
-      console.log('Attempting to capture image...');
-      chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        function: captureCameraImage
-      }, (results) => {
-        if (chrome.runtime.lastError) {
-          console.error('Error executing script:', chrome.runtime.lastError);
-        } else {
-          console.log('Capture script execution results:', results);
-        }
-      });
-    }, 2000); // Capture every 2 seconds
-  }, 1000); // Initial delay
-}
-
-// Function to stop camera capture
-function stopCameraCapture() {
-  console.log('Stopping camera capture');
-  if (captureInterval) {
-    clearInterval(captureInterval);
-    captureInterval = null;
-  }
-}
-
-// Generate or retrieve a persistent deviceId
-function getDeviceId(callback) {
-  chrome.storage.local.get(['deviceId'], function(result) {
-    if (result.deviceId) {
-      callback(result.deviceId);
-    } else {
-      const newId = crypto.randomUUID();
-      chrome.storage.local.set({ deviceId: newId }, function() {
-        callback(newId);
-      });
-    }
-  });
-}
-
-// Function to capture image from camera (runs in content script context)
-function captureCameraImage(retryCount = 0) {
-  console.log('Starting image capture process');
-  
-  // Find the user's own video element
-  // In Google Meet, the user's own video usually has specific classes or attributes
-  const videoElements = Array.from(document.querySelectorAll('video'));
-  console.log('Found video elements:', videoElements.length);
-
-  // Find the user's own video element
-  let userVideo = videoElements.find(video => {
-    // Check if this is the user's own video
-    const isUserVideo = 
-      // Usually the user's video is in a specific container
-      video.closest('[data-self-view]') !== null ||
-      // Or has specific classes
-      video.closest('.self-view') !== null ||
-      // Or is in the main video area
-      (video.offsetWidth > 100 && 
-       video.offsetHeight > 100 && 
-       video.srcObject && 
-       video.readyState === 4 &&
-       // Additional check to ensure it's the user's video
-       video.closest('[data-allocation-index="0"]') !== null);
-    
-    return isUserVideo;
-  });
-
-  if (!userVideo) {
-    if (retryCount < 10) {
-      console.log('No user video element found, retrying...');
-      setTimeout(() => captureCameraImage(retryCount + 1), 1000);
-    } else {
-      console.log('No user video element found after retries.');
-    }
-    return;
-  }
-
-  console.log('Found user video element:', {
-    width: userVideo.videoWidth,
-    height: userVideo.videoHeight,
-    readyState: userVideo.readyState,
-    hasStream: !!userVideo.srcObject,
-    classes: userVideo.className,
-    parentClasses: userVideo.parentElement?.className,
-    isPlaying: !userVideo.paused,
-    currentTime: userVideo.currentTime
-  });
-
-  try {
-    const canvas = document.createElement('canvas');
-    canvas.width = userVideo.videoWidth || 640;
-    canvas.height = userVideo.videoHeight || 480;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(userVideo, 0, 0, canvas.width, canvas.height);
-
-    const imageData = canvas.toDataURL('image/jpeg', 0.8);
-    const meetingId = window.location.pathname.split('/').pop();
-    
-    // Get user information
-    let userName = null;
-    let userId = null;
-    let participantId = null;
-
-    // Try to get user name from the page
-    const nameElem = document.querySelector('span.notranslate');
-    if (nameElem) {
-      userName = nameElem.textContent.trim();
-    }
-
-    // Get user ID from the page
-    const userElem = document.querySelector('[data-self-name]');
-    if (userElem) {
-      userId = userElem.getAttribute('data-self-name');
-    }
-
-    // Get participant ID
-    const participantElem = document.querySelector('[data-participant-id]');
-    if (participantElem) {
-      participantId = participantElem.getAttribute('data-participant-id');
-    }
-
-    // Only send if we have a valid user name
-    if (userName) {
-      chrome.runtime.sendMessage({
-        type: 'IMAGE_CAPTURED',
-        imageData,
-        meetingId,
-        userId,
-        userName,
-        participantId
-      });
-    } else {
-      console.log('No user name found, skipping capture');
-    }
-  } catch (error) {
-    console.error('Error capturing image:', error);
-  }
-}
-
 // Function to send image to backend
-async function sendImageToBackend(imageData, meetingId, userId, participantId, userName, deviceId) {
+async function sendImageToBackend(imageData, meetingId, userId, userName) {
   console.log('Sending image to backend for meeting:', meetingId);
   try {
     const response = await fetch(BACKEND_URL, {
@@ -298,9 +158,7 @@ async function sendImageToBackend(imageData, meetingId, userId, participantId, u
         meetingId,
         timestamp: new Date().toISOString(),
         userId,
-        participantId,
-        userName,
-        deviceId
+        userName
       })
     });
 

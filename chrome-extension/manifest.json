@@ -1,27 +1,39 @@
 {
   "manifest_version": 3,
-  "name": "Google Meet Status Indicator",
+  "name": "EngageSense",
   "version": "1.0",
   "description": "Captures and sends meeting images to backend",
   "permissions": [
-    "tabs",
-    "activeTab",
-    "scripting",
     "storage",
-    "desktopCapture"
+    "scripting",
+    "tabs",
+    "identity",
+    "identity.email"
   ],
   "host_permissions": [
-    "https://meet.google.com/*",
-    "https://student-attention.onrender.com/*"
+    "https://meet.google.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_icon": "icons/icon.svg"
+    "default_icon": {
+      "16": "logo_16.png",
+      "48": "logo_48.png",
+      "128": "logo_128.png"
+    }
   },
   "background": {
     "service_worker": "background.js"
   },
   "icons": {
-    "128": "icons/icon.svg"
-  }
-} 
+    "16": "logo_16.png",
+    "48": "logo_48.png",
+    "128": "logo_128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

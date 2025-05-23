@@ -54,7 +54,7 @@ app.add_middleware(
 os.makedirs(IMAGES_DIR, exist_ok=True)
 os.makedirs(MEETING_DATA_DIR, exist_ok=True)
 
-# In-memory attention tracking: { (meetingId, userId, deviceId): deque([0/1,...]) }
+# In-memory attention tracking: { (meetingId, userId): deque([0/1,...]) }
 ATTENTION_HISTORY = defaultdict(lambda: deque(maxlen=30))  # last 30 frames
 # Short-term buffer for robust detection
 SHORT_TERM_HISTORY = defaultdict(lambda: deque(maxlen=5))  # last 5 frames
@@ -67,29 +67,40 @@ eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    # Create new table with updated schema
     c.execute('''
-        CREATE TABLE IF NOT EXISTS attention_scores (
+        CREATE TABLE IF NOT EXISTS attention_scores_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             meeting_id TEXT NOT NULL,
-            device_id TEXT NOT NULL,
-            user_name TEXT,
+            user_email TEXT NOT NULL,
             date TEXT NOT NULL,
             attention REAL,
             updated_at TEXT,
             attention_sum REAL DEFAULT 0,
             attention_count INTEGER DEFAULT 0,
-            UNIQUE(meeting_id, device_id, user_name, date)
+            UNIQUE(meeting_id, user_email, date)
         )
     ''')
-    # Try to add columns if missing (for migration)
-    try:
-        c.execute('ALTER TABLE attention_scores ADD COLUMN attention_sum REAL DEFAULT 0')
-    except Exception:
-        pass
-    try:
-        c.execute('ALTER TABLE attention_scores ADD COLUMN attention_count INTEGER DEFAULT 0')
-    except Exception:
-        pass
+    
+    # Check if old table exists
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='attention_scores'")
+    if c.fetchone():
+        # Migrate data from old table to new table
+        try:
+            c.execute('''
+                INSERT OR IGNORE INTO attention_scores_new (
+                    meeting_id, user_email, date, attention, updated_at, attention_sum, attention_count
+                )
+                SELECT 
+                    meeting_id, user_name, date, attention, updated_at, attention_sum, attention_count
+                FROM attention_scores
+            ''')
+            # Rename tables
+            c.execute("ALTER TABLE attention_scores RENAME TO attention_scores_old")
+            c.execute("ALTER TABLE attention_scores_new RENAME TO attention_scores")
+        except Exception as e:
+            print(f"Migration error: {e}")
+    
     conn.commit()
     conn.close()
 init_db()
@@ -98,10 +109,8 @@ class ImageData(BaseModel):
     imageData: str
     meetingId: str
     timestamp: str
-    userId: Optional[str] = None
-    participantId: Optional[str] = None
-    userName: Optional[str] = None
-    deviceId: Optional[str] = None
+    userId: Optional[str] = None  # Using userId for email now
+    userName: Optional[str] = None  # Using userName for email as fallback
 
 def detect_attention(image_bytes):
     nparr = np.frombuffer(image_bytes, np.uint8)
@@ -149,46 +158,52 @@ async def receive_image(data: ImageData):
         image_data = data.imageData.split(',')[1]
         image_bytes = base64.b64decode(image_data)
         timestamp = datetime.fromisoformat(data.timestamp.replace('Z', '+00:00'))
+        
+        # Get user email - prioritize userId, fallback to userName
+        user_email = data.userId or data.userName or "unknown"
+        
         meeting_data = {
             "meetingId": data.meetingId,
-            "userId": data.userId,
-            "participantId": data.participantId,
-            "userName": data.userName,
-            "deviceId": data.deviceId,
+            "userEmail": user_email,
             "timestamp": data.timestamp,
         }
         meeting_data_path = os.path.join(MEETING_DATA_DIR, f"{data.meetingId}.json")
         with open(meeting_data_path, 'w') as f:
             json.dump(meeting_data, f, indent=2)
+        
         # --- Attention detection ---
-        key = (data.meetingId, data.userId or "unknown", data.deviceId or "unknown")
+        key = (data.meetingId, user_email)
         raw_attention = detect_attention(image_bytes)
+        
         # Robust smoothing: use short-term buffer
         SHORT_TERM_HISTORY[key].append(raw_attention)
+        
         # If at least 3 of the last 5 frames are attentive, mark as attentive
         if sum(SHORT_TERM_HISTORY[key]) >= 3:
             attention = 1
         else:
             attention = 0
-        # Store userName and deviceId in a parallel dict for display
-        if not hasattr(receive_image, 'user_names'):
-            receive_image.user_names = {}
-        if not hasattr(receive_image, 'device_ids'):
-            receive_image.device_ids = {}
-        receive_image.user_names[key] = data.userName
-        receive_image.device_ids[key] = data.deviceId
+        
+        # Store userEmail in a parallel dict for display
+        if not hasattr(receive_image, 'user_emails'):
+            receive_image.user_emails = {}
+        
+        receive_image.user_emails[key] = user_email
         ATTENTION_HISTORY[key].append(attention)
+        
         # --- SQLite upsert for running average ---
-        if data.userName and data.userName.strip():
+        if user_email and user_email != "unknown":
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             today = timestamp.strftime('%Y-%m-%d')
             now_iso = datetime.now().isoformat()
+            
             # Try to update first
             c.execute('''
                 SELECT attention_sum, attention_count FROM attention_scores
-                WHERE meeting_id=? AND device_id=? AND user_name=? AND date=?
-            ''', (data.meetingId, data.deviceId, data.userName, today))
+                WHERE meeting_id=? AND user_email=? AND date=?
+            ''', (data.meetingId, user_email, today))
+            
             row = c.fetchone()
             if row:
                 new_sum = row[0] + float(attention)
@@ -197,15 +212,17 @@ async def receive_image(data: ImageData):
                 c.execute('''
                     UPDATE attention_scores
                     SET attention=?, attention_sum=?, attention_count=?, updated_at=?
-                    WHERE meeting_id=? AND device_id=? AND user_name=? AND date=?
-                ''', (avg, new_sum, new_count, now_iso, data.meetingId, data.deviceId, data.userName, today))
+                    WHERE meeting_id=? AND user_email=? AND date=?
+                ''', (avg, new_sum, new_count, now_iso, data.meetingId, user_email, today))
             else:
                 c.execute('''
-                    INSERT INTO attention_scores (meeting_id, device_id, user_name, date, attention, updated_at, attention_sum, attention_count)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (data.meetingId, data.deviceId, data.userName, today, float(attention), now_iso, float(attention), 1))
+                    INSERT INTO attention_scores (meeting_id, user_email, date, attention, updated_at, attention_sum, attention_count)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (data.meetingId, user_email, today, float(attention), now_iso, float(attention), 1))
+            
             conn.commit()
             conn.close()
+        
         return {
             "status": "success",
             "message": "Image processed and not stored",
@@ -221,20 +238,20 @@ async def health_check():
 @app.get("/api/attention")
 async def get_attention_scores():
     result = []
-    user_names = getattr(receive_image, 'user_names', {})
-    device_ids = getattr(receive_image, 'device_ids', {})
-    for (meetingId, userId, deviceId), history in ATTENTION_HISTORY.items():
+    user_emails = getattr(receive_image, 'user_emails', {})
+    
+    for (meetingId, userEmail), history in ATTENTION_HISTORY.items():
         if history:
             avg_attention = sum(history) / len(history)
         else:
             avg_attention = 0.0
+        
         result.append({
             "meetingId": meetingId,
-            "userId": userId,
-            "userName": user_names.get((meetingId, userId, deviceId)),
-            "deviceId": device_ids.get((meetingId, userId, deviceId)),
+            "userEmail": userEmail,
             "attention_score": round(avg_attention, 2)
         })
+    
     return result
 
 @app.get("/api/db-attention", response_class=HTMLResponse)
@@ -357,9 +374,9 @@ async def db_attention_page():
                     document.getElementById('results').innerHTML = '<p>No data found for this meeting ID.</p>';
                     return;
                 }
-                let html = `<table><tr><th>User Name</th><th>Device ID</th><th>Attention (%)</th></tr>`;
+                let html = `<table><tr><th>User Email</th><th>Attention (%)</th></tr>`;
                 for (const row of data) {
-                    html += `<tr><td>${row.user_name || ''}</td><td>${row.device_id}</td><td>${(row.attention_percent).toFixed(2)}</td></tr>`;
+                    html += `<tr><td>${row.user_email || ''}</td><td>${(row.attention_percent).toFixed(2)}</td></tr>`;
                 }
                 html += '</table>';
                 document.getElementById('results').innerHTML = html;
@@ -377,14 +394,13 @@ async def db_attention_page():
 async def db_attention_data(meeting_id: str = Query(...)):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT user_name, device_id, attention_sum, attention_count FROM attention_scores WHERE meeting_id=?", (meeting_id,))
+    c.execute("SELECT user_email, attention_sum, attention_count FROM attention_scores WHERE meeting_id=?", (meeting_id,))
     rows = c.fetchall()
     conn.close()
     result = [
         {
-            "user_name": row[0],
-            "device_id": row[1],
-            "attention_percent": (row[2] / row[3] * 100) if row[3] else 0.0
+            "user_email": row[0],
+            "attention_percent": (row[1] / row[2] * 100) if row[2] else 0.0
         }
         for row in rows
     ]
