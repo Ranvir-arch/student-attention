@@ -81,6 +81,16 @@ def init_db():
             UNIQUE(meeting_id, user_email, date)
         )
     ''')
+    # New table for attention history (per image)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS attention_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            meeting_id TEXT NOT NULL,
+            user_email TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            attention REAL NOT NULL
+        )
+    ''')
     conn.commit()
     conn.close()
 init_db()
@@ -155,6 +165,16 @@ async def receive_image(data: ImageData):
         
         receive_image.user_emails[key] = user_email
         ATTENTION_HISTORY[key].append(attention)
+        
+        # --- Store attention history for graph ---
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO attention_history (meeting_id, user_email, timestamp, attention) VALUES (?, ?, ?, ?)",
+            (data.meetingId, user_email, data.timestamp, float(attention))
+        )
+        conn.commit()
+        conn.close()
         
         # --- SQLite upsert for running average ---
         if user_email and user_email != "unknown":
@@ -386,6 +406,18 @@ async def db_attention_score(meeting_id: str = Query(...), user_email: str = Que
     else:
         attention_percent = 0.0
     return {"user_email": user_email, "attention_percent": attention_percent}
+
+@app.get("/api/attention-history", response_class=JSONResponse)
+async def attention_history(meeting_id: str = Query(...), user_email: str = Query(...)):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT timestamp, attention FROM attention_history WHERE meeting_id=? AND user_email=? ORDER BY timestamp ASC",
+        (meeting_id, user_email)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [{"timestamp": ts, "attention": att} for ts, att in rows]
 
 if __name__ == "__main__":
     import uvicorn
