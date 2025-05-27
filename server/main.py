@@ -371,6 +371,22 @@ async def db_attention_data(meeting_id: str = Query(...)):
     ]
     return result
 
+@app.get("/api/db-attention-score", response_class=JSONResponse)
+async def db_attention_score(meeting_id: str = Query(...), user_email: str = Query(...)):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT attention_sum, attention_count FROM attention_scores WHERE meeting_id=? AND user_email=?",
+        (meeting_id, user_email)
+    )
+    row = c.fetchone()
+    conn.close()
+    if row and row[1]:
+        attention_percent = (row[0] / row[1]) * 100
+    else:
+        attention_percent = 0.0
+    return {"user_email": user_email, "attention_percent": attention_percent}
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 3000))
