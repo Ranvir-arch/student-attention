@@ -116,30 +116,31 @@ def detect_attention(image_bytes):
     if len(faces) == 0:
         return 0  # No face detected
 
+    eye_scores = []
     for (x, y, w, h) in faces:
         roi_gray = gray[y:y+h, x:x+w]
         eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=3)
-        eye_scores = []
         for (ex, ey, ew, eh) in eyes:
             eye_img = roi_gray[ey:ey+eh, ex:ex+ew]
-            eye_blur = cv2.GaussianBlur(eye_img, (7, 7), 0)
-            _, thresh = cv2.threshold(eye_blur, 50, 255, cv2.THRESH_BINARY_INV)
-            contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                max_contour = max(contours, key=cv2.contourArea)
-                M = cv2.moments(max_contour)
-                if M['m00'] != 0:
-                    cx = int(M['m10'] / M['m00'])
-                    norm_pos = cx / ew  # 0 (left) to 1 (right)
-                    # Score: 1 at center (0.5), 0 at edges (0 or 1)
-                    score = 1 - 2 * abs(norm_pos - 0.5)
-                    score = max(0, min(1, score))  # Clamp to [0, 1]
-                    eye_scores.append(score)
-        if eye_scores:
-            return sum(eye_scores) / len(eye_scores)
-        else:
-            return 0  # Face detected, no eyes
-    return 0
+            # Adaptive threshold based on eye region intensity
+            mean_intensity = np.mean(eye_img)
+            threshold = int(mean_intensity * 0.7)  # 0.7 is a tunable parameter
+            _, thresh = cv2.threshold(eye_img, threshold, 255, cv2.THRESH_BINARY_INV)
+            # Find all dark pixels (potential pupil)
+            ys, xs = np.where(thresh == 255)
+            if len(xs) > 0:
+                cx = np.mean(xs)
+                cy = np.mean(ys)
+                # Score based on how close cx is to the center of the eye region
+                center_x = ew / 2
+                norm_dist = abs(cx - center_x) / (ew / 2)
+                score = 1 - norm_dist  # 1 if centered, 0 if at edge
+                score = max(0, min(1, score))
+                eye_scores.append(score)
+    if eye_scores:
+        return float(np.mean(eye_scores))
+    else:
+        return 0
 
 @app.post("/api/images")
 async def receive_image(data: ImageData):
