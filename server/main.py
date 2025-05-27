@@ -110,9 +110,7 @@ def detect_attention(image_bytes):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.equalizeHist(gray)
 
-    # Try frontal face first (more robust parameters)
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3)
-    # Fallback to profile face
     if len(faces) == 0:
         faces = profile_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3)
     if len(faces) == 0:
@@ -121,10 +119,26 @@ def detect_attention(image_bytes):
     for (x, y, w, h) in faces:
         roi_gray = gray[y:y+h, x:x+w]
         eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=3)
-        if len(eyes) >= 1:
-            return 1  # Face and at least one eye detected
+        eye_scores = []
+        for (ex, ey, ew, eh) in eyes:
+            eye_img = roi_gray[ey:ey+eh, ex:ex+ew]
+            eye_blur = cv2.GaussianBlur(eye_img, (7, 7), 0)
+            _, thresh = cv2.threshold(eye_blur, 50, 255, cv2.THRESH_BINARY_INV)
+            contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                max_contour = max(contours, key=cv2.contourArea)
+                M = cv2.moments(max_contour)
+                if M['m00'] != 0:
+                    cx = int(M['m10'] / M['m00'])
+                    norm_pos = cx / ew  # 0 (left) to 1 (right)
+                    # Score: 1 at center (0.5), 0 at edges (0 or 1)
+                    score = 1 - 2 * abs(norm_pos - 0.5)
+                    score = max(0, min(1, score))  # Clamp to [0, 1]
+                    eye_scores.append(score)
+        if eye_scores:
+            return sum(eye_scores) / len(eye_scores)
         else:
-            return 0.5  # Face detected, no eyes
+            return 0  # Face detected, no eyes
     return 0
 
 @app.post("/api/images")
