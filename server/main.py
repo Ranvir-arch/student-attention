@@ -245,6 +245,7 @@ async def db_attention_page():
     <html>
     <head>
         <title>Attention Scores Lookup</title>
+        <script src='https://cdn.jsdelivr.net/npm/chart.js'></script>
         <style>
             body {
                 font-family: Arial, sans-serif;
@@ -326,6 +327,43 @@ async def db_attention_page():
                 text-align: center;
                 font-style: italic;
             }
+            /* Modal styles */
+            .modal {
+                display: none;
+                position: fixed;
+                z-index: 1000;
+                left: 0;
+                top: 0;
+                width: 100%;
+                height: 100%;
+                overflow: auto;
+                background-color: rgba(0,0,0,0.4);
+            }
+            .modal-content {
+                background-color: #fefefe;
+                margin: 5% auto;
+                padding: 2em;
+                border: 1px solid #888;
+                width: 90%;
+                max-width: 600px;
+                border-radius: 8px;
+                position: relative;
+            }
+            .close {
+                color: #aaa;
+                position: absolute;
+                top: 10px;
+                right: 20px;
+                font-size: 28px;
+                font-weight: bold;
+                cursor: pointer;
+            }
+            .close:hover,
+            .close:focus {
+                color: #000;
+                text-decoration: none;
+                cursor: pointer;
+            }
         </style>
     </head>
     <body>
@@ -341,7 +379,16 @@ async def db_attention_page():
             </form>
             <div id='results'></div>
         </div>
+        <!-- Modal for graph -->
+        <div id="graphModal" class="modal">
+            <div class="modal-content">
+                <span class="close" id="closeModal">&times;</span>
+                <h3>Attention Graph</h3>
+                <canvas id="attentionChart" width="500" height="300"></canvas>
+            </div>
+        </div>
         <script>
+        let chartInstance = null;
         document.getElementById('meet-form').onsubmit = async function(e) {
             e.preventDefault();
             const meetId = document.getElementById('meeting-id').value.trim();
@@ -359,9 +406,9 @@ async def db_attention_page():
                     document.getElementById('results').innerHTML = '<p>No data found for this meeting ID.</p>';
                     return;
                 }
-                let html = `<table><tr><th>User Email</th><th>Attention (%)</th></tr>`;
+                let html = `<table><tr><th>User Email</th><th>Attention (%)</th><th>View Graph</th></tr>`;
                 for (const row of data) {
-                    html += `<tr><td>${row.user_email || ''}</td><td>${(row.attention_percent).toFixed(2)}</td></tr>`;
+                    html += `<tr><td>${row.user_email || ''}</td><td>${(row.attention_percent).toFixed(2)}</td><td><button onclick="showGraph('${meetId}','${row.user_email}')">View Graph</button></td></tr>`;
                 }
                 html += '</table>';
                 document.getElementById('results').innerHTML = html;
@@ -370,6 +417,64 @@ async def db_attention_page():
                 document.getElementById('results').innerHTML = '<p>Error loading data. Please try again.</p>';
             }
         };
+        // Modal logic
+        const modal = document.getElementById('graphModal');
+        const closeModal = document.getElementById('closeModal');
+        closeModal.onclick = function() {
+            modal.style.display = 'none';
+            if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+        };
+        window.onclick = function(event) {
+            if (event.target == modal) {
+                modal.style.display = 'none';
+                if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+            }
+        };
+        // Show graph function
+        async function showGraph(meetingId, userEmail) {
+            modal.style.display = 'block';
+            const chartCanvas = document.getElementById('attentionChart');
+            if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+            // Fetch attention history
+            const url = `/api/attention-history?meeting_id=${encodeURIComponent(meetingId)}&user_email=${encodeURIComponent(userEmail)}`;
+            const resp = await fetch(url);
+            const data = await resp.json();
+            if (!data.length) {
+                chartCanvas.getContext('2d').clearRect(0, 0, chartCanvas.width, chartCanvas.height);
+                chartCanvas.getContext('2d').fillText('No data available', 10, 50);
+                return;
+            }
+            // Prepare data
+            const labels = data.map(d => new Date(d.timestamp).toLocaleTimeString());
+            const scores = data.map(d => d.attention * 100);
+            chartInstance = new Chart(chartCanvas, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Attention (%)',
+                        data: scores,
+                        borderColor: '#007bff',
+                        backgroundColor: 'rgba(0,123,255,0.1)',
+                        fill: true,
+                        tension: 0.2
+                    }]
+                },
+                options: {
+                    responsive: false,
+                    scales: {
+                        y: {
+                            min: 0,
+                            max: 100,
+                            title: { display: true, text: 'Attention (%)' }
+                        },
+                        x: {
+                            title: { display: true, text: 'Time' }
+                        }
+                    }
+                }
+            });
+        }
         </script>
     </body>
     </html>
