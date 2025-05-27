@@ -91,45 +91,45 @@ class ImageData(BaseModel):
     userId: Optional[str] = None  # Using userId for email now
     userName: Optional[str] = None  # Using userName for email as fallback
 
-    def detect_attention(image_bytes):
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None:
-            return 0
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-        if len(faces) == 0:
-            return 0  # No face detected
+def detect_attention(image_bytes):
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return 0
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+    if len(faces) == 0:
+        return 0  # No face detected
 
-        for (x, y, w, h) in faces:
-            roi_gray = gray[y:y+h, x:x+w]
-            eyes = eye_cascade.detectMultiScale(roi_gray)
-            gaze_scores = []
-            for (ex, ey, ew, eh) in eyes:
-                eye_img = roi_gray[ey:ey+eh, ex:ex+ew]
-                eye_blur = cv2.GaussianBlur(eye_img, (7, 7), 0)
-                _, thresh = cv2.threshold(eye_blur, 50, 255, cv2.THRESH_BINARY_INV)  # More forgiving threshold
-                contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-                if contours:
-                    max_contour = max(contours, key=cv2.contourArea)
-                    M = cv2.moments(max_contour)
-                    if M['m00'] != 0:
-                        cx = int(M['m10'] / M['m00'])
-                        norm_pos = cx / ew
-                        # Wider center range
-                        if 0.2 < norm_pos < 0.8:
-                            gaze_scores.append(1)
-                        else:
-                            gaze_scores.append(0.5)  # Not centered, but eye detected
+    for (x, y, w, h) in faces:
+        roi_gray = gray[y:y+h, x:x+w]
+        eyes = eye_cascade.detectMultiScale(roi_gray)
+        gaze_scores = []
+        for (ex, ey, ew, eh) in eyes:
+            eye_img = roi_gray[ey:ey+eh, ex:ex+ew]
+            eye_blur = cv2.GaussianBlur(eye_img, (7, 7), 0)
+            _, thresh = cv2.threshold(eye_blur, 50, 255, cv2.THRESH_BINARY_INV)  # More forgiving threshold
+            contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                max_contour = max(contours, key=cv2.contourArea)
+                M = cv2.moments(max_contour)
+                if M['m00'] != 0:
+                    cx = int(M['m10'] / M['m00'])
+                    norm_pos = cx / ew
+                    # Wider center range
+                    if 0.2 < norm_pos < 0.8:
+                        gaze_scores.append(1)
                     else:
-                        gaze_scores.append(0.5)
+                        gaze_scores.append(0.5)  # Not centered, but eye detected
                 else:
                     gaze_scores.append(0.5)
-            if gaze_scores:
-                return sum(gaze_scores) / len(gaze_scores)
             else:
-                return 0.5  # Face detected, no eyes
-        return 0
+                gaze_scores.append(0.5)
+        if gaze_scores:
+            return sum(gaze_scores) / len(gaze_scores)
+        else:
+            return 0.5  # Face detected, no eyes
+    return 0
 
 @app.post("/api/images")
 async def receive_image(data: ImageData):
