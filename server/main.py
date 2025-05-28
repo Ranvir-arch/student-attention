@@ -107,40 +107,89 @@ def detect_attention(image_bytes):
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         return 0
+    
+    # Convert to grayscale and enhance contrast
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.equalizeHist(gray)
 
+    # Try to detect frontal face first
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3)
+    face_score = 0
+    
+    # If no frontal face, try profile face
     if len(faces) == 0:
         faces = profile_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3)
+        if len(faces) > 0:
+            face_score = 0.5  # Profile face detected, partial score
+    
     if len(faces) == 0:
         return 0  # No face detected
 
+    # Calculate face position score
+    img_height, img_width = gray.shape
+    face_scores = []
+    
+    for (x, y, w, h) in faces:
+        # Calculate how centered the face is
+        face_center_x = x + w/2
+        face_center_y = y + h/2
+        center_dist_x = abs(face_center_x - img_width/2) / (img_width/2)
+        center_dist_y = abs(face_center_y - img_height/2) / (img_height/2)
+        
+        # Face position score (1 if perfectly centered, 0 if at edge)
+        position_score = 1 - (center_dist_x + center_dist_y)/2
+        
+        # Face size score (prefer faces that are not too small or too large)
+        face_size_ratio = (w * h) / (img_width * img_height)
+        size_score = 1 - abs(face_size_ratio - 0.1) * 5  # Optimal size around 10% of frame
+        
+        face_scores.append((position_score + size_score) / 2)
+
+    # Get the best face score
+    face_score = max(face_scores) if face_scores else 0
+
+    # Eye detection and scoring
     eye_scores = []
     for (x, y, w, h) in faces:
         roi_gray = gray[y:y+h, x:x+w]
         eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=3)
+        
+        if len(eyes) == 0:
+            continue
+            
         for (ex, ey, ew, eh) in eyes:
             eye_img = roi_gray[ey:ey+eh, ex:ex+ew]
-            # Adaptive threshold based on eye region intensity
+            
+            # Calculate eye region intensity
             mean_intensity = np.mean(eye_img)
-            threshold = int(mean_intensity * 0.7)  # 0.7 is a tunable parameter
+            threshold = int(mean_intensity * 0.7)
             _, thresh = cv2.threshold(eye_img, threshold, 255, cv2.THRESH_BINARY_INV)
-            # Find all dark pixels (potential pupil)
+            
+            # Find pupil position
             ys, xs = np.where(thresh == 255)
             if len(xs) > 0:
                 cx = np.mean(xs)
                 cy = np.mean(ys)
-                # Score based on how close cx is to the center of the eye region
+                
+                # Calculate how centered the pupil is
                 center_x = ew / 2
-                norm_dist = abs(cx - center_x) / (ew / 2)
-                score = 1 - norm_dist  # 1 if centered, 0 if at edge
-                score = max(0, min(1, score))
-                eye_scores.append(score)
+                center_y = eh / 2
+                norm_dist_x = abs(cx - center_x) / (ew / 2)
+                norm_dist_y = abs(cy - center_y) / (eh / 2)
+                
+                # Combined eye score (1 if perfectly centered, 0 if at edge)
+                eye_score = 1 - (norm_dist_x + norm_dist_y)/2
+                eye_scores.append(eye_score)
+
+    # Calculate final attention score
     if eye_scores:
-        return float(np.mean(eye_scores))
+        eye_score = np.mean(eye_scores)
+        # Combine face and eye scores with weights
+        attention_score = (face_score * 0.4 + eye_score * 0.6)
+        return float(attention_score)
     else:
-        return 0
+        # If no eyes detected but face is present, return partial score
+        return float(face_score * 0.4)
 
 @app.post("/api/images")
 async def receive_image(data: ImageData):
@@ -165,14 +214,8 @@ async def receive_image(data: ImageData):
         key = (data.meetingId, user_email)
         raw_attention = detect_attention(image_bytes)
         
-        # Robust smoothing: use short-term buffer
-        SHORT_TERM_HISTORY[key].append(raw_attention)
-        
-        # If at least 3 of the last 5 frames are attentive, mark as attentive
-        if sum(SHORT_TERM_HISTORY[key]) >= 3:
-            attention = 1
-        else:
-            attention = 0
+        # Store the continuous attention score directly
+        attention = raw_attention
         
         # Store userEmail in a parallel dict for display
         if not hasattr(receive_image, 'user_emails'):
@@ -262,86 +305,146 @@ async def db_attention_page():
         <title>Attention Scores Lookup</title>
         <script src='https://cdn.jsdelivr.net/npm/chart.js'></script>
         <style>
+            /* Modern CSS Reset */
+            *, *::before, *::after {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+
             body {
-                font-family: Arial, sans-serif;
-                margin: 2em;
-                background-color: #f4f4f4;
-                color: #333;
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+                min-height: 100vh;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 2rem;
+                color: #2c3e50;
             }
+
             .container {
-                max-width: 800px;
-                margin: 0 auto;
-                background-color: #fff;
-                padding: 2em;
-                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-                border-radius: 8px;
+                background: rgba(255, 255, 255, 0.95);
+                border-radius: 20px;
+                padding: 2.5rem;
+                width: 100%;
+                max-width: 900px;
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+                backdrop-filter: blur(10px);
             }
+
             h2 {
                 text-align: center;
-                color: #0056b3;
+                font-size: 2.5rem;
+                color: #2c3e50;
+                margin-bottom: 1.5rem;
+                font-weight: 700;
             }
+
             .logo-container {
                 text-align: center;
-                margin-bottom: 2em;
+                margin-bottom: 2rem;
             }
+
             .logo-container img {
                 max-width: 150px;
                 height: auto;
+                border-radius: 10px;
+                box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
             }
+
             form {
-                margin-bottom: 2em;
+                margin-bottom: 2rem;
                 text-align: center;
             }
+
             form label {
-                margin-right: 1em;
-                font-weight: bold;
+                display: block;
+                margin-bottom: 0.5rem;
+                font-weight: 600;
+                color: #2c3e50;
             }
+
             form input[type='text'] {
-                padding: 0.5em;
-                border: 1px solid #ccc;
-                border-radius: 4px;
-                margin-right: 1em;
+                width: 100%;
+                max-width: 400px;
+                padding: 1rem 1.5rem;
+                border: 2px solid #e0e0e0;
+                border-radius: 12px;
+                font-size: 1rem;
+                transition: all 0.3s ease;
+                background: white;
+                margin-bottom: 1rem;
             }
+
+            form input[type='text']:focus {
+                outline: none;
+                border-color: #3498db;
+                box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.2);
+            }
+
             form button {
-                padding: 0.5em 1.5em;
-                background-color: #007bff;
+                padding: 1rem 2rem;
+                background: linear-gradient(135deg, #3498db, #2980b9);
                 color: white;
                 border: none;
-                border-radius: 4px;
+                border-radius: 12px;
+                font-size: 1rem;
+                font-weight: 600;
                 cursor: pointer;
-                transition: background-color 0.3s ease;
+                transition: all 0.3s ease;
             }
+
             form button:hover {
-                background-color: #0056b3;
+                transform: translateY(-2px);
+                box-shadow: 0 5px 15px rgba(52, 152, 219, 0.3);
             }
+
             table {
-                border-collapse: collapse;
                 width: 100%;
-                margin-top: 1em;
-                border: 1px solid #ddd;
+                border-collapse: separate;
+                border-spacing: 0;
+                margin-top: 1.5rem;
+                background: white;
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             }
+
             th, td {
-                border: 1px solid #ddd;
-                padding: 10px;
+                padding: 1rem;
                 text-align: left;
+                border-bottom: 1px solid #e0e0e0;
             }
+
             th {
-                background-color: #007bff;
-                color: white;
+                background: #f8f9fa;
+                font-weight: 600;
+                color: #2c3e50;
             }
-            tr:nth-child(even) {
-                background-color: #f2f2f2;
+
+            td {
+                color: #2c3e50;
             }
-            tr:hover {
-                background-color: #ddd;
+
+            tr:last-child td {
+                border-bottom: none;
             }
+
+            tr:hover td {
+                background: #f8f9fa;
+            }
+
             #results {
-                margin-top: 1.5em;
+                margin-top: 1.5rem;
             }
+
             #results p {
                 text-align: center;
+                color: #666;
                 font-style: italic;
             }
+
             /* Modal styles */
             .modal {
                 display: none;
@@ -351,33 +454,70 @@ async def db_attention_page():
                 top: 0;
                 width: 100%;
                 height: 100%;
-                overflow: auto;
-                background-color: rgba(0,0,0,0.4);
+                background: rgba(0, 0, 0, 0.5);
+                backdrop-filter: blur(5px);
             }
+
             .modal-content {
-                background-color: #fefefe;
+                background: white;
                 margin: 5% auto;
-                padding: 2em;
-                border: 1px solid #888;
+                padding: 2rem;
                 width: 90%;
-                max-width: 600px;
-                border-radius: 8px;
+                max-width: 800px;
+                border-radius: 20px;
                 position: relative;
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
             }
+
             .close {
-                color: #aaa;
                 position: absolute;
-                top: 10px;
-                right: 20px;
-                font-size: 28px;
-                font-weight: bold;
+                top: 1rem;
+                right: 1.5rem;
+                font-size: 1.5rem;
+                color: #666;
                 cursor: pointer;
+                transition: color 0.3s ease;
             }
-            .close:hover,
-            .close:focus {
-                color: #000;
-                text-decoration: none;
+
+            .close:hover {
+                color: #2c3e50;
+            }
+
+            /* Graph button styles */
+            button.view-graph {
+                padding: 0.5rem 1rem;
+                background: linear-gradient(135deg, #3498db, #2980b9);
+                color: white;
+                border: none;
+                border-radius: 8px;
                 cursor: pointer;
+                transition: all 0.3s ease;
+                font-size: 0.9rem;
+            }
+
+            button.view-graph:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 10px rgba(52, 152, 219, 0.3);
+            }
+
+            @media (max-width: 768px) {
+                .container {
+                    padding: 1.5rem;
+                }
+
+                form input[type='text'] {
+                    max-width: 100%;
+                }
+
+                table {
+                    display: block;
+                    overflow-x: auto;
+                }
+
+                .modal-content {
+                    margin: 10% auto;
+                    padding: 1.5rem;
+                }
             }
         </style>
     </head>
@@ -389,7 +529,7 @@ async def db_attention_page():
             <h2>Attention Scores Lookup</h2>
             <form id='meet-form'>
                 <label for='meeting-id'>Meeting ID:</label>
-                <input type='text' id='meeting-id' name='meeting-id' required>
+                <input type='text' id='meeting-id' name='meeting-id' placeholder="Enter meeting ID..." required>
                 <button type='submit'>Search</button>
             </form>
             <div id='results'></div>
@@ -409,7 +549,6 @@ async def db_attention_page():
             const meetId = document.getElementById('meeting-id').value.trim();
             if (!meetId) return;
             document.getElementById('results').innerHTML = 'Loading...';
-            // Construct the URL based on the current host
             const dataUrl = `${window.location.origin}/api/db-attention-data?meeting_id=${encodeURIComponent(meetId)}`;
             try {
                 const resp = await fetch(dataUrl);
@@ -423,7 +562,11 @@ async def db_attention_page():
                 }
                 let html = `<table><tr><th>User Email</th><th>Attention (%)</th><th>View Graph</th></tr>`;
                 for (const row of data) {
-                    html += `<tr><td>${row.user_email || ''}</td><td>${(row.attention_percent).toFixed(2)}</td><td><button onclick="showGraph('${meetId}','${row.user_email}')">View Graph</button></td></tr>`;
+                    html += `<tr>
+                        <td>${row.user_email || ''}</td>
+                        <td>${(row.attention_percent).toFixed(2)}</td>
+                        <td><button class="view-graph" onclick="showGraph('${meetId}','${row.user_email}')">View Graph</button></td>
+                    </tr>`;
                 }
                 html += '</table>';
                 document.getElementById('results').innerHTML = html;
@@ -432,6 +575,7 @@ async def db_attention_page():
                 document.getElementById('results').innerHTML = '<p>Error loading data. Please try again.</p>';
             }
         };
+
         // Modal logic
         const modal = document.getElementById('graphModal');
         const closeModal = document.getElementById('closeModal');
@@ -445,23 +589,26 @@ async def db_attention_page():
                 if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
             }
         };
+
         // Show graph function
         async function showGraph(meetingId, userEmail) {
             modal.style.display = 'block';
             const chartCanvas = document.getElementById('attentionChart');
             if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
-            // Fetch attention history
+            
             const url = `/api/attention-history?meeting_id=${encodeURIComponent(meetingId)}&user_email=${encodeURIComponent(userEmail)}`;
             const resp = await fetch(url);
             const data = await resp.json();
+            
             if (!data.length) {
                 chartCanvas.getContext('2d').clearRect(0, 0, chartCanvas.width, chartCanvas.height);
                 chartCanvas.getContext('2d').fillText('No data available', 10, 50);
                 return;
             }
-            // Prepare data
+
             const labels = data.map(d => new Date(d.timestamp).toLocaleTimeString());
             const scores = data.map(d => d.attention * 100);
+            
             chartInstance = new Chart(chartCanvas, {
                 type: 'line',
                 data: {
@@ -469,22 +616,38 @@ async def db_attention_page():
                     datasets: [{
                         label: 'Attention (%)',
                         data: scores,
-                        borderColor: '#007bff',
-                        backgroundColor: 'rgba(0,123,255,0.1)',
+                        borderColor: '#3498db',
+                        backgroundColor: 'rgba(52, 152, 219, 0.1)',
                         fill: true,
-                        tension: 0.2
+                        tension: 0.4
                     }]
                 },
                 options: {
-                    responsive: false,
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                        title: {
+                            display: true,
+                            text: 'Attention Score Over Time'
+                        }
+                    },
                     scales: {
                         y: {
                             min: 0,
                             max: 100,
-                            title: { display: true, text: 'Attention (%)' }
+                            title: {
+                                display: true,
+                                text: 'Attention (%)'
+                            }
                         },
                         x: {
-                            title: { display: true, text: 'Time' }
+                            title: {
+                                display: true,
+                                text: 'Time'
+                            }
                         }
                     }
                 }
