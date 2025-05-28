@@ -456,6 +456,7 @@ async def db_attention_page():
                 height: 100%;
                 background: rgba(0, 0, 0, 0.5);
                 backdrop-filter: blur(5px);
+                overflow: hidden;
             }
 
             .modal-content {
@@ -464,9 +465,23 @@ async def db_attention_page():
                 padding: 2rem;
                 width: 90%;
                 max-width: 800px;
+                max-height: 80vh;
                 border-radius: 20px;
                 position: relative;
                 box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+                display: flex;
+                flex-direction: column;
+            }
+
+            .modal-content h3 {
+                margin-bottom: 1rem;
+            }
+
+            .chart-container {
+                position: relative;
+                height: 400px;
+                width: 100%;
+                margin-top: 1rem;
             }
 
             .close {
@@ -524,7 +539,7 @@ async def db_attention_page():
     <body>
         <div class='container'>
             <div class='logo-container'>
-                <img src='/images/logo_p.jpg' alt='Logo'>
+                <img src='/images/logo_p.png' alt='Logo'>
             </div>
             <h2>Attention Scores Lookup</h2>
             <form id='meet-form'>
@@ -539,7 +554,9 @@ async def db_attention_page():
             <div class="modal-content">
                 <span class="close" id="closeModal">&times;</span>
                 <h3>Attention Graph</h3>
-                <canvas id="attentionChart" width="500" height="300"></canvas>
+                <div class="chart-container">
+                    <canvas id="attentionChart"></canvas>
+                </div>
             </div>
         </div>
         <script>
@@ -625,6 +642,10 @@ async def db_attention_page():
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    animation: {
+                        duration: 1000,
+                        easing: 'easeInOutQuart'
+                    },
                     plugins: {
                         legend: {
                             position: 'top',
